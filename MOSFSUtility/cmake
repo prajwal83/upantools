@@ -1,0 +1,6 @@
+gcc FSUtility.c FileSystem.c Directory.c -o mosfsutil
+
+if [ "$?" -ne "0" ]
+then
+	echo -e "\n\n ERROR\n"
+fi
