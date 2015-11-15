@@ -8,38 +8,38 @@
 #include "ElfHeader.h"
 #include "ElfProgHeader.h"
 #include "ElfSectionHeader.h"
-#include "ElfHacker.h"
+#include "ElfParser.h"
 #include "ElfDynamicSection.h"
 #include "ElfRelocationSection.h"
 #include "ElfGlobals.h"
 
-int ElfHacker_OpenELFFile(const char* elfFileName)
+int ElfParser_OpenELFFile(const char* elfFileName)
 {
-	if((ElfHacker_File_fd = open(elfFileName, O_RDONLY)) < 0)
+	if((ElfParser_File_fd = open(elfFileName, O_RDONLY)) < 0)
 	{
 		perror("OPEN") ;
 		return -1 ;
 	}
 
-	ElfHacker_pSecHeaderStrTable = NULL ;
-	ElfHacker_pDymStrTable = NULL ;
-	ElfHacker_pSymStrTable = NULL ;
-	ElfHacker_pELFProgramHeader = NULL ;
-	ElfHacker_pELFSectionHeader = NULL ;
-	ElfHacker_pELFSymbolTable = NULL ;
-	ElfHacker_pELFDynSymbolTable = NULL ;
-	ElfHacker_pELFDynamicSection = NULL ;
-	ElfHacker_pELFRelocationSection = NULL ;
-	ElfHacker_pELFDynRelocationSection = NULL ;
-	ElfHacker_pELFRelocationSectionAd = NULL ;
-	ElfHacker_pHashTable = NULL ;
+	ElfParser_pSecHeaderStrTable = NULL ;
+	ElfParser_pDymStrTable = NULL ;
+	ElfParser_pSymStrTable = NULL ;
+	ElfParser_pELFProgramHeader = NULL ;
+	ElfParser_pELFSectionHeader = NULL ;
+	ElfParser_pELFSymbolTable = NULL ;
+	ElfParser_pELFDynSymbolTable = NULL ;
+	ElfParser_pELFDynamicSection = NULL ;
+	ElfParser_pELFRelocationSection = NULL ;
+	ElfParser_pELFDynRelocationSection = NULL ;
+	ElfParser_pELFRelocationSectionAd = NULL ;
+	ElfParser_pHashTable = NULL ;
 	
 	return 0 ;
 }
 
-int ElfHacker_CloseELFFile()
+int ElfParser_CloseELFFile()
 {
-	if(close(ElfHacker_File_fd) < 0)
+	if(close(ElfParser_File_fd) < 0)
 	{
 		perror("CLOSE") ;
 		return -1 ;
@@ -61,7 +61,7 @@ int ElfHacker_CloseELFFile()
 	return 0 ;
 }
 
-void ElfHacker_DumpGOT()
+void ElfParser_DumpGOT()
 {
 	printf("\n************ ELF GOT START **********************\n") ;
 	char strbuf[4096] ;
@@ -75,25 +75,25 @@ void ElfHacker_DumpGOT()
 		return ;
 	}
 
-	for(i = 0; i < ElfHacker_elfHeader.e_shnum; i++)
+	for(i = 0; i < ElfParser_elfHeader.e_shnum; i++)
 	{
-		if(strcmp(GET_SECTION_NAME(ElfHacker_pELFSectionHeader[i].sh_name), ".got.plt") == 0)
+		if(strcmp(GET_SECTION_NAME(ElfParser_pELFSectionHeader[i].sh_name), ".got.plt") == 0)
 		{
-			if(lseek(ElfHacker_File_fd, ElfHacker_pELFSectionHeader[i].sh_offset, SEEK_SET) < 0)
+			if(lseek(ElfParser_File_fd, ElfParser_pELFSectionHeader[i].sh_offset, SEEK_SET) < 0)
 			{
 				perror("LSEEK") ;
 				fclose(fp) ;
 				return ;
 			}
 			
-			if(read(ElfHacker_File_fd, (char*)strbuf, ElfHacker_pELFSectionHeader[i].sh_size) < 0)
+			if(read(ElfParser_File_fd, (char*)strbuf, ElfParser_pELFSectionHeader[i].sh_size) < 0)
 			{
 				perror("READ ELF GOT TABLE") ;
 				fclose(fp) ;
 				return ;
 			}
 
-			for(j = 0; j < ElfHacker_pELFSectionHeader[i].sh_size; j++)
+			for(j = 0; j < ElfParser_pELFSectionHeader[i].sh_size; j++)
 				fprintf(fp, "%c", strbuf[j]) ;
 
 		}
@@ -119,7 +119,7 @@ void ElfHacker_DumpGOT()
 	printf("\n************ ELF GOT END **********************\n") ;
 }
 
-void ElfHacker_DumpPLT()
+void ElfParser_DumpPLT()
 {
 	printf("\n************ ELF PLT START **********************\n") ;
 	char strbuf[4096] ;
@@ -133,25 +133,25 @@ void ElfHacker_DumpPLT()
 		return ;
 	}
 
-	for(i = 0; i < ElfHacker_elfHeader.e_shnum; i++)
+	for(i = 0; i < ElfParser_elfHeader.e_shnum; i++)
 	{
-		if(strcmp(GET_SECTION_NAME(ElfHacker_pELFSectionHeader[i].sh_name), ".plt") == 0)
+		if(strcmp(GET_SECTION_NAME(ElfParser_pELFSectionHeader[i].sh_name), ".plt") == 0)
 		{
-			if(lseek(ElfHacker_File_fd, ElfHacker_pELFSectionHeader[i].sh_offset, SEEK_SET) < 0)
+			if(lseek(ElfParser_File_fd, ElfParser_pELFSectionHeader[i].sh_offset, SEEK_SET) < 0)
 			{
 				perror("LSEEK") ;
 				fclose(fp) ;
 				return ;
 			}
 			
-			if(read(ElfHacker_File_fd, (char*)strbuf, ElfHacker_pELFSectionHeader[i].sh_size) < 0)
+			if(read(ElfParser_File_fd, (char*)strbuf, ElfParser_pELFSectionHeader[i].sh_size) < 0)
 			{
 				perror("READ ELF PLT TABLE") ;
 				fclose(fp) ;
 				return ;
 			}
 
-			for(j = 0; j < ElfHacker_pELFSectionHeader[i].sh_size; j++)
+			for(j = 0; j < ElfParser_pELFSectionHeader[i].sh_size; j++)
 				fprintf(fp, "%c", strbuf[j]) ;
 
 		}
@@ -177,7 +177,7 @@ void ElfHacker_DumpPLT()
 	printf("\n************ ELF PLT END **********************\n") ;
 }
 
-int ElfHacker_HackFile()
+int ElfParser_HackFile()
 {
 	if(ElfHeader_Read() < 0)
 		return(++exitNumber) ;
@@ -221,7 +221,7 @@ int ElfHacker_HackFile()
 	return 0 ;
 }
 
-void ElfHacker_DisplayHackInfo()
+void ElfParser_DisplayHackInfo()
 {
 	ElfHeader_Display() ;
 	ElfProgHeader_Display() ;
@@ -233,8 +233,8 @@ void ElfHacker_DisplayHackInfo()
 	ElfRelocationSection_DisplayWithOutAddends() ;
 	ElfRelocationSection_DisplayWithAddends() ;
 
-	ElfHacker_DumpGOT() ;
-	ElfHacker_DumpPLT() ;
+	ElfParser_DumpGOT() ;
+	ElfParser_DumpPLT() ;
 
 	ElfStringTable_DisplaySecHeaderStrTable() ;
 	ElfStringTable_DisplaySymStrTable() ;

@@ -71,7 +71,7 @@ static const char Elf_SectionHeaderType[12][40] = {
 
 char sec_flags[40] ;
 
-#define GET_SECTION_NAME(str_index) ElfHacker_pSecHeaderStrTable + str_index
+#define GET_SECTION_NAME(str_index) ElfParser_pSecHeaderStrTable + str_index
 
 int ElfSectionHeader_Read() ;
 void ElfSectionHeader_Display() ;

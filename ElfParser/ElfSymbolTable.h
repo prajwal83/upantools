@@ -42,7 +42,7 @@ typedef struct {
 	unsigned uiTableSize ;
 	Elf32_Sym* SymTabEntries ;
 
-} ElfHacker_SymbolTableList ;
+} ElfParser_SymbolTableList ;
 
 int ElfSymbolTable_Read() ;
 void ElfSymbolTable_Display() ;

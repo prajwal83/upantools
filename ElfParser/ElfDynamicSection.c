@@ -14,12 +14,12 @@ static void AllocateDynamicSection()
 {
 	unsigned i ;
 
-	for(i = 0; i < ElfHacker_elfHeader.e_shnum; i++)
+	for(i = 0; i < ElfParser_elfHeader.e_shnum; i++)
 	{
-		if(ElfHacker_pELFSectionHeader[i].sh_type == SHT_DYNAMIC)
+		if(ElfParser_pELFSectionHeader[i].sh_type == SHT_DYNAMIC)
 		{
-			ElfHacker_uiNoOfDynSectionEntries = ElfHacker_pELFSectionHeader[i].sh_size / ElfHacker_pELFSectionHeader[i].sh_entsize ;
-			ElfHacker_pELFDynamicSection = (Elf32_Dyn*)malloc(ElfHacker_uiNoOfDynSectionEntries *  sizeof(Elf32_Dyn)) ;
+			ElfParser_uiNoOfDynSectionEntries = ElfParser_pELFSectionHeader[i].sh_size / ElfParser_pELFSectionHeader[i].sh_entsize ;
+			ElfParser_pELFDynamicSection = (Elf32_Dyn*)malloc(ElfParser_uiNoOfDynSectionEntries *  sizeof(Elf32_Dyn)) ;
 			break ;
 		}
 	}
@@ -133,7 +133,7 @@ static void DisplayDynamicSectionEntry(Elf32_Dyn* dynEntry)
 
 void ElfDynamicSection_DeAllocate()
 {
-	free(ElfHacker_pELFDynamicSection) ;
+	free(ElfParser_pELFDynamicSection) ;
 }
 
 int ElfDynamicSection_Read()
@@ -143,17 +143,17 @@ int ElfDynamicSection_Read()
 	Initialize() ;
 	AllocateDynamicSection() ;
 
-	for(i = 0; i < ElfHacker_elfHeader.e_shnum; i++)
+	for(i = 0; i < ElfParser_elfHeader.e_shnum; i++)
 	{
-		if(ElfHacker_pELFSectionHeader[i].sh_type == SHT_DYNAMIC)
+		if(ElfParser_pELFSectionHeader[i].sh_type == SHT_DYNAMIC)
 		{
-			if(lseek(ElfHacker_File_fd, ElfHacker_pELFSectionHeader[i].sh_offset, SEEK_SET) < 0)
+			if(lseek(ElfParser_File_fd, ElfParser_pELFSectionHeader[i].sh_offset, SEEK_SET) < 0)
 			{
 				perror("LSEEK DYM TABLE") ;
 				return -1 ;
 			}
 
-			if(read(ElfHacker_File_fd, (char*)(ElfHacker_pELFDynamicSection), ElfHacker_uiNoOfDynSectionEntries * sizeof(Elf32_Dyn)) < 0)
+			if(read(ElfParser_File_fd, (char*)(ElfParser_pELFDynamicSection), ElfParser_uiNoOfDynSectionEntries * sizeof(Elf32_Dyn)) < 0)
 			{
 				perror("READ DYM TABLE") ;
 				return -1 ;
@@ -171,13 +171,13 @@ void ElfDynamicSection_Display()
 
 	unsigned i ;
 
-	printf("\n No of Ent = %u", ElfHacker_uiNoOfDynSectionEntries) ;
-	for(i = 0; i < ElfHacker_uiNoOfDynSectionEntries; i++)
+	printf("\n No of Ent = %u", ElfParser_uiNoOfDynSectionEntries) ;
+	for(i = 0; i < ElfParser_uiNoOfDynSectionEntries; i++)
 	{
-		if(ElfHacker_pELFDynamicSection[i].d_tag == DT_NULL)
+		if(ElfParser_pELFDynamicSection[i].d_tag == DT_NULL)
 			break ;
 		printf("\n Dynamic Section Entry %d:", i) ;
-		DisplayDynamicSectionEntry(&ElfHacker_pELFDynamicSection[i]) ;
+		DisplayDynamicSectionEntry(&ElfParser_pELFDynamicSection[i]) ;
 	}
 
 	printf("\n************ ELF DYNAMIC SECTION END **********************\n") ;

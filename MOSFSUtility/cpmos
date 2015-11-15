@@ -1,8 +1,0 @@
-
-./mosfsutil 0 ../../MOS/floppy/DRV1.FDD.img << EOF
-1
-3
-../yard/$1
-$1
-5
-EOF

@@ -6,7 +6,7 @@
 #include "ElfHeader.h"
 #include "ElfProgHeader.h"
 #include "ElfSectionHeader.h"
-#include "ElfHacker.h"
+#include "ElfParser.h"
 #include "ElfSymbolTable.h"
 #include "ElfGlobals.h"
 
@@ -31,13 +31,13 @@ int ElfHeader_Read()
 {
 	char buf[512] ;
 
-	if(read(ElfHacker_File_fd, &buf, 512) < 0)
+	if(read(ElfParser_File_fd, &buf, 512) < 0)
 	{
 		perror("READ ELF HEADER") ;
 		return -1 ;
 	}
 
-	memcpy(&ElfHacker_elfHeader, &buf, sizeof(Elf_Header)) ;
+	memcpy(&ElfParser_elfHeader, &buf, sizeof(Elf_Header)) ;
 
 	return 0 ;
 }
@@ -46,20 +46,20 @@ void ElfHeader_Display()
 {
 	printf("\n************ ELF HEADER START **********************\n") ;
 	
-	ElfHeader_Display_e_ident_Field(&ElfHacker_elfHeader) ;
-	printf("\n\te_tpye = %s", Elf_eType[ElfHacker_elfHeader.e_type]) ;
-	printf("\n\te_machine = %s", Elf_eMachine[ElfHacker_elfHeader.e_machine]) ;
-	printf("\n\te_version = %d", ElfHacker_elfHeader.e_version) ;
-	printf("\n\te_entry = 0x%X (%d)", ElfHacker_elfHeader.e_entry, ElfHacker_elfHeader.e_entry) ;
-	printf("\n\te_phoff = %d", ElfHacker_elfHeader.e_phoff) ;
-	printf("\n\te_shoff = %d", ElfHacker_elfHeader.e_shoff) ;
-	printf("\n\te_flags = %d", ElfHacker_elfHeader.e_flags) ;
-	printf("\n\te_ehsize = %d", ElfHacker_elfHeader.e_ehsize) ;
-	printf("\n\te_phentsize = %d", ElfHacker_elfHeader.e_phentsize) ;
-	printf("\n\te_phnum = %d", ElfHacker_elfHeader.e_phnum) ;
-	printf("\n\te_shentsize = %d", ElfHacker_elfHeader.e_shentsize) ;
-	printf("\n\te_shnum = %d", ElfHacker_elfHeader.e_shnum) ;
-	printf("\n\te_shstrndx = %d", ElfHacker_elfHeader.e_shstrndx) ;
+	ElfHeader_Display_e_ident_Field(&ElfParser_elfHeader) ;
+	printf("\n\te_tpye = %s", Elf_eType[ElfParser_elfHeader.e_type]) ;
+	printf("\n\te_machine = %s", Elf_eMachine[ElfParser_elfHeader.e_machine]) ;
+	printf("\n\te_version = %d", ElfParser_elfHeader.e_version) ;
+	printf("\n\te_entry = 0x%X (%d)", ElfParser_elfHeader.e_entry, ElfParser_elfHeader.e_entry) ;
+	printf("\n\te_phoff = %d", ElfParser_elfHeader.e_phoff) ;
+	printf("\n\te_shoff = %d", ElfParser_elfHeader.e_shoff) ;
+	printf("\n\te_flags = %d", ElfParser_elfHeader.e_flags) ;
+	printf("\n\te_ehsize = %d", ElfParser_elfHeader.e_ehsize) ;
+	printf("\n\te_phentsize = %d", ElfParser_elfHeader.e_phentsize) ;
+	printf("\n\te_phnum = %d", ElfParser_elfHeader.e_phnum) ;
+	printf("\n\te_shentsize = %d", ElfParser_elfHeader.e_shentsize) ;
+	printf("\n\te_shnum = %d", ElfParser_elfHeader.e_shnum) ;
+	printf("\n\te_shstrndx = %d", ElfParser_elfHeader.e_shstrndx) ;
 
 	printf("\n************ ELF HEADER END ************************\n") ;
 }

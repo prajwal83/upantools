@@ -7,14 +7,14 @@
 #include "ElfHeader.h"
 #include "ElfProgHeader.h"
 #include "ElfSectionHeader.h"
-#include "ElfHacker.h"
+#include "ElfParser.h"
 #include "ElfGlobals.h"
 
 int main(int argc, char** argv)
 {
 	if(argc != 2)
 	{
-		fprintf(stderr, "\n Usage elfhacker <ElfExe>\n") ;
+		fprintf(stderr, "\n Usage elfparser <ElfExe>\n") ;
 		exit(1) ;
 	}
 
@@ -23,15 +23,15 @@ int main(int argc, char** argv)
 
 //	printf("\n Working on File: %s\n", elfFileName) ;
 
-	if(ElfHacker_OpenELFFile(argv[1]) < 0)
+	if(ElfParser_OpenELFFile(argv[1]) < 0)
 		exit(++exitNumber) ;
 
-	if((exitNumber = ElfHacker_HackFile() < 0))
+	if((exitNumber = ElfParser_HackFile() < 0))
 		exit(exitNumber) ;
 
-	ElfHacker_DisplayHackInfo() ;
+	ElfParser_DisplayHackInfo() ;
 
-	if(ElfHacker_CloseELFFile() < 0)
+	if(ElfParser_CloseELFFile() < 0)
 		exit(++exitNumber) ;
 		
 	return exitNumber ;

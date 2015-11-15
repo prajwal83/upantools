@@ -1,53 +1,53 @@
+./mosfsutil 63 $UPANIX_HOME/USBImage/30MUSB.img << EOF
+1
+3
+osin
+3
+bin
+3
+lib
+1
+6
+EOF
 
-./mosfsutil 0 ../../MOS/floppy/DRV1.FDD.img << EOF
+./mosfsutil 63 $UPANIX_HOME/USBImage/30MUSB.img << EOF
 1
 2
 osin
-3
-../../MOS/osutils/.procinit
+4
+$UPANIX_HOME/osutils/.procinit
 .procinit
-3
-../../MOS/osutils/.dll
+4
+$UPANIX_HOME/osutils/.dll
 .dll
 1
-5
+6
 EOF
 
-./mosfsutil 0 ../../MOS/floppy/DRV1.FDD.img << EOF
+./mosfsutil 63 $UPANIX_HOME/USBImage/30MUSB.img << EOF
 1
 2
 bin
-3
-../yard/msh
+4
+$UPANAPPS_HOME/shell/msh
 msh
-3
-../yard/edit
+4
+$UPANAPPS_HOME/editor/edit
 edit
 1
-5
+6
 EOF
 
-./mosfsutil 0 ../../MOS/floppy/DRV1.FDD.img << EOF
+./mosfsutil 63 $UPANIX_HOME/USBImage/30MUSB.img << EOF
 1
 2
 lib
-3
-../yard/libc.so
+4
+$UPANAPPS_HOME/libc/libc.so
 libc.so
-3
-../yard/libmterm.so
+4
+$UPANAPPS_HOME/libmterm/libmterm.so
 libmterm.so
 1
-5
-EOF
-
-./mosfsutil 0 ../../MOS/floppy/DRV1.FDD.img << EOF
-1
-2
-ldscripts
-3
-../yard/elf_i386.xc
-elf_i386.xc
-1
-5
+6
 EOF

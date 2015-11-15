@@ -10,11 +10,11 @@
 static void AllocateHashTable()
 {
 	unsigned i ;
-	for(i = 0; i < ElfHacker_elfHeader.e_shnum; i++)
+	for(i = 0; i < ElfParser_elfHeader.e_shnum; i++)
 	{
-		if(ElfHacker_pELFSectionHeader[i].sh_type == SHT_HASH)
+		if(ElfParser_pELFSectionHeader[i].sh_type == SHT_HASH)
 		{
-			ElfHacker_pHashTable = (unsigned*)malloc(sizeof(char) * ElfHacker_pELFSectionHeader[i].sh_size) ;
+			ElfParser_pHashTable = (unsigned*)malloc(sizeof(char) * ElfParser_pELFSectionHeader[i].sh_size) ;
 			return ;
 		}
 	}
@@ -23,7 +23,7 @@ static void AllocateHashTable()
 
 void ElfHashTable_DeAllocateHashTable()
 {
-	free(ElfHacker_pHashTable) ;
+	free(ElfParser_pHashTable) ;
 }
 
 int ElfHashTable_Read()
@@ -32,23 +32,23 @@ int ElfHashTable_Read()
 	
 	AllocateHashTable() ;
 
-	for(i = 0; i < ElfHacker_elfHeader.e_shnum; i++)
+	for(i = 0; i < ElfParser_elfHeader.e_shnum; i++)
 	{
-		if(ElfHacker_pELFSectionHeader[i].sh_type == SHT_HASH)
+		if(ElfParser_pELFSectionHeader[i].sh_type == SHT_HASH)
 		{
-			if(lseek(ElfHacker_File_fd, ElfHacker_pELFSectionHeader[i].sh_offset, SEEK_SET) < 0)
+			if(lseek(ElfParser_File_fd, ElfParser_pELFSectionHeader[i].sh_offset, SEEK_SET) < 0)
 			{
 				perror("LSEEK HASH TABLE") ;
 				return -1 ;
 			}
 
-			if(read(ElfHacker_File_fd, (char*)(ElfHacker_pHashTable), ElfHacker_pELFSectionHeader[i].sh_size) < 0)
+			if(read(ElfParser_File_fd, (char*)(ElfParser_pHashTable), ElfParser_pELFSectionHeader[i].sh_size) < 0)
 			{
 				perror("READ HASH TABLE") ;
 				return -1 ;
 			}
-			ElfHashTable_uiNoOfBuckets = ElfHacker_pHashTable[0] ;
-			ElfHashTable_uiNoOfChains = ElfHacker_pHashTable[1] ;
+			ElfHashTable_uiNoOfBuckets = ElfParser_pHashTable[0] ;
+			ElfHashTable_uiNoOfChains = ElfParser_pHashTable[1] ;
 			break ;
 		}
 	}

@@ -1,1 +1,4 @@
 *.o
+depend.d
+elfparser
+mosfsutil
