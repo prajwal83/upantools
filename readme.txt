@@ -1,4 +1,4 @@
-ElfHacker 
+ElfParser
 ---------------------------------------------------------------------------------------------
 This is an app used to parse Elf executable/dll structure
 Helpful in analysing/debugging issues with elf exe/dlls that are copied to MOS filesystem for
