@@ -1,6 +1,12 @@
 #ifndef _UPAN_FS_H_
 #define _UPAN_FS_H_
 
+#define ATTR_DELETED_DIR 0x1000
+#define ATTR_TYPE_DIRECTORY 0x2000
+
+#define EOC 0x0FFFFFFF
+#define DIR_ENTRIES_PER_SECTOR 7
+
 #define PACKED __attribute__((packed))
 
 typedef unsigned char byte;
@@ -48,9 +54,9 @@ typedef struct
 
 typedef struct
 {
-    upanfs_dir_entry dir_entry;
-    unsigned uiSectorNo;
-    unsigned uiSectorEntryPosition;
+  upanfs_dir_entry dir_entry;
+  unsigned uiSectorNo;
+  unsigned uiSectorEntryPosition;
 } PACKED upanfs_cwd;
 
 typedef struct
