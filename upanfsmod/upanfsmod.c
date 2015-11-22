@@ -57,9 +57,9 @@ static unsigned upanfs_get_sec_entry_val(struct super_block* sb, unsigned uiCurr
   return ((unsigned*)mblock->fstable)[uiCurrentSectorID] & EOC;
 }
 
-static int upanfs_get_real_sec_num(int iSectorID, upanfs_mount_block* mblock)
+static unsigned upanfs_get_real_sec_num(unsigned uiSectorID, upanfs_mount_block* mblock)
 {
-	return iSectorID + 1 + mblock->bpb.BPB_RsvdSecCnt + mblock->bpb.BPB_FSTableSize ;
+	return uiSectorID + 1 + mblock->bpb.BPB_RsvdSecCnt + mblock->bpb.BPB_FSTableSize ;
 }
 
 static int sectors_per_block(struct super_block* sb)
@@ -77,6 +77,14 @@ static int block_offset(struct super_block* sb, int sector)
   return (sector % sectors_per_block(sb)) * 512;
 }
 
+static struct timespec seconds_to_timespec(unsigned seconds)
+{
+  struct timespec ts;
+  ts.tv_sec = seconds;
+  ts.tv_nsec = seconds * 1000;
+  return ts;
+}
+
 static ssize_t upanfs_read(struct file * filp, char __user * buf, size_t len, loff_t * ppos)
 {
   return 0;
@@ -89,15 +97,30 @@ static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t 
 
 static bool upanfs_read_dir_entry(struct super_block* sb, upanfs_dir_entry* dir_entry, unsigned sector, unsigned sector_pos)
 {
-  struct buffer_head* bh;
   upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
-  int real_sector = upanfs_get_real_sec_num(sector, mblock);
-  int block_no = sector_to_block(sb, real_sector);
   int offset;
-  if(!(bh = sb_bread(sb, block_no)))
+  unsigned real_sector = upanfs_get_real_sec_num(sector, mblock);
+  struct buffer_head* bh = sb_bread(sb, sector_to_block(sb, real_sector));
+  if(!bh)
     return false;
   offset = block_offset(sb, real_sector);
   memcpy((byte*)dir_entry, bh->b_data + offset + sector_pos *  sizeof(upanfs_dir_entry), sizeof(upanfs_dir_entry));
+  brelse(bh);
+  return true;
+}
+
+static bool upanfs_write_dir_entry(struct super_block* sb, upanfs_dir_entry* dir_entry, unsigned sector, unsigned sector_pos)
+{
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+  int offset;
+  unsigned real_sector = upanfs_get_real_sec_num(sector, mblock);
+  struct buffer_head* bh = sb_bread(sb, sector_to_block(sb, real_sector));
+  if(!bh)
+    return false;
+  offset = block_offset(sb, real_sector);
+  memcpy(bh->b_data + offset + sector_pos *  sizeof(upanfs_dir_entry), dir_entry, sizeof(upanfs_dir_entry));
+  mark_buffer_dirty(bh);
+  sync_dirty_buffer(bh);
   brelse(bh);
   return true;
 }
@@ -111,7 +134,6 @@ static void upanfs_destory_inode(struct inode *inode)
 
 static void upanfs_put_super(struct super_block *sb)
 {
-  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
   printk(KERN_INFO "Calling upanfs_put_super");
 }
 
@@ -130,7 +152,7 @@ static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *c
   while(uiCurrentSectorID != EOC)
   {
     byte* dir_buffer;
-    int sector = upanfs_get_real_sec_num(uiCurrentSectorID, mblock);
+    unsigned sector = upanfs_get_real_sec_num(uiCurrentSectorID, mblock);
     if(!(bh = sb_bread(sb, sector_to_block(sb, sector))))
     {
       printk(KERN_ERR "out of memory - failed to allocate bh");
@@ -155,7 +177,9 @@ static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *c
         else
           inode->i_fop = &upanfs_file_operations;
 
-        inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
+        inode->i_atime = seconds_to_timespec(cur_dir->AccessedTime.tSec);
+        inode->i_mtime = seconds_to_timespec(cur_dir->ModifiedTime.tSec);
+        inode->i_ctime = seconds_to_timespec(cur_dir->CreatedTime.tSec);
         inode->i_private = uiSectorPosIndex;
 
         inode_init_owner(inode, parent_inode, isDir ? S_IFDIR | 0755 : S_IFREG | 0644);
@@ -166,7 +190,7 @@ static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *c
 
       if(!(cur_dir->usAttribute & ATTR_DELETED_DIR))
       {
-        uiScanDirCount++ ;
+        uiScanDirCount++;
         if(uiScanDirCount >= parent.uiSize)
         {
           status = 3;
@@ -181,20 +205,216 @@ static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *c
       break;
   }
   if(status == 3)
-    printk(KERN_ERR "file/directory [%s] not found\n", child_dentry->d_name.name);
+    printk(KERN_INFO "file/directory [%s] not found\n", child_dentry->d_name.name);
   return NULL;
+}
+
+static bool upanfs_set_sector_value(struct super_block* sb, unsigned uiSectorID, unsigned uiValue)
+{
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+  struct buffer_head *bh;
+  unsigned sector = mblock->bpb.BPB_RsvdSecCnt + 1 + FSTABLE_BLOCK_ID(uiSectorID);
+  byte* fstable_block;
+
+  ((unsigned*)mblock->fstable)[uiSectorID] = uiValue;
+
+  if(!(bh = sb_bread(sb, sector_to_block(sb, sector))))
+  {
+    printk(KERN_ERR "failed to read fstable sector\n");
+    return false;
+  }
+
+  fstable_block = bh->b_data + block_offset(sb, sector);
+  ((unsigned*)fstable_block)[FSTABLE_BLOCK_OFFSET(uiSectorID)] = uiValue;
+  
+  mark_buffer_dirty(bh);
+  sync_dirty_buffer(bh);
+  brelse(bh);
+
+  if(uiValue == EOC)
+    mblock->bpb.uiUsedSectors++;
+   else if(uiValue == 0)
+    mblock->bpb.uiUsedSectors--;
+  
+  return true;
+}
+
+static bool upanfs_get_free_sector(struct super_block* sb, unsigned* uiSectorID)
+{
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+  unsigned* fstable = (unsigned*)mblock->fstable;
+  unsigned fstable_size = mblock->bpb.BPB_FSTableSize * ENTRIES_PER_TABLE_SECTOR;
+
+  for(unsigned i = 0; i < fstable_size; ++i)
+  {
+    if(!(fstable[i] & EOC))
+    {
+      *uiSectorID = i;
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool upanfs_allocate_sector(struct super_block* sb, unsigned* uiFreeSectorID)
+{
+  if(!upanfs_get_free_sector(sb, uiFreeSectorID))
+    return false;
+
+  if(!upanfs_set_sector_value(sb, *uiFreeSectorID, EOC))
+    return false;
+
+  return true;
+}
+
+static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umode_t mode)
+{
+  struct inode *newdir_inode;
+	unsigned uiFreeSectorID;
+  unsigned uiSectorNo;
+  unsigned uiCurrentSectorID, uiPrevSectorID = EOC;
+  unsigned uiSectorPos;
+  unsigned uiScanDirCount = 0;
+  bool found = false;
+  struct timespec current_time = CURRENT_TIME;
+  unsigned real_sector, offset;
+  upanfs_dir_entry parent;
+  upanfs_dir_entry* newdir;
+  struct buffer_head* newdir_bh = NULL;
+  struct super_block* sb = dir->i_sb;
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+
+  if(!upanfs_read_dir_entry(sb, &parent, dir->i_ino, (unsigned)dir->i_private))
+  {
+    printk(KERN_ERR "failed to read parent dir at sector: %ld\n", dir->i_ino);
+    return -EPERM;
+  }
+
+	if(parent.uiStartSectorID != EOC)
+	{
+    uiCurrentSectorID = parent.uiStartSectorID;
+    while(uiCurrentSectorID != EOC)
+    {
+      byte* dir_buffer;
+      unsigned sector = upanfs_get_real_sec_num(uiCurrentSectorID, mblock);
+      if(!(newdir_bh = sb_bread(sb, sector_to_block(sb, sector))))
+      {
+        printk(KERN_ERR "out of memory - failed to allocate bh");
+        return -ENOMEM;
+      }
+      dir_buffer = newdir_bh->b_data + block_offset(sb, sector);
+      for(unsigned uiSectorPosIndex = 0; uiSectorPosIndex < DIR_ENTRIES_PER_SECTOR; uiSectorPosIndex++)
+      {
+        upanfs_dir_entry* cur_dir = ((upanfs_dir_entry*)dir_buffer) + uiSectorPosIndex;
+        if(cur_dir->usAttribute & ATTR_DELETED_DIR)
+        {
+          found = true;
+          uiSectorNo = uiCurrentSectorID;
+          uiSectorPos = uiSectorPosIndex;
+          break;
+        }
+        uiScanDirCount++ ;
+        if(uiScanDirCount >= parent.uiSize)
+        {
+          if(uiSectorPosIndex < DIR_ENTRIES_PER_SECTOR - 1)
+          {
+            found = true;
+            uiSectorNo = uiCurrentSectorID;
+            uiSectorPos = uiSectorPosIndex + 1;
+          }
+          break;
+        }
+      }
+      if(found)
+        break;
+      brelse(newdir_bh);
+      newdir_bh = NULL;
+      uiPrevSectorID = uiCurrentSectorID;
+      uiCurrentSectorID = upanfs_get_sec_entry_val(sb, uiCurrentSectorID);
+    }
+	}
+  if(!found)
+  {
+    unsigned sector;
+    if(!upanfs_allocate_sector(sb, &uiFreeSectorID))
+      return false;
+    uiSectorNo = uiFreeSectorID;
+    uiSectorPos = 0;
+    sector = upanfs_get_real_sec_num(uiSectorNo, mblock);
+    if(!(newdir_bh = sb_bread(sb, sector_to_block(sb, sector))))
+    {
+      printk(KERN_ERR "out of memory - failed to allocate bh");
+      return -ENOMEM;
+    }
+    if(parent.uiStartSectorID == EOC)
+      parent.uiStartSectorID = uiSectorNo;
+    else if(uiPrevSectorID != EOC)
+      upanfs_set_sector_value(sb, uiPrevSectorID, uiSectorNo);
+  }
+  if(newdir_bh == NULL)
+  {
+    printk(KERN_ERR "failed to create new dir: %s\n", dentry->d_name.name);
+    return -EPERM;
+  }
+  real_sector = upanfs_get_real_sec_num(uiSectorNo, mblock);
+  offset = block_offset(sb, real_sector);
+  newdir = (upanfs_dir_entry*)(newdir_bh->b_data + offset + uiSectorPos * sizeof(upanfs_dir_entry));
+  strcpy(newdir->Name, dentry->d_name.name);
+
+  if(S_ISDIR(mode))
+    newdir->usAttribute = ATTR_DIR_DEFAULT | ATTR_TYPE_DIRECTORY;
+  else
+    newdir->usAttribute = ATTR_FILE_DEFAULT;
+  newdir->CreatedTime.tSec = newdir->AccessedTime.tSec = newdir->ModifiedTime.tSec = current_time.tv_sec;
+	newdir->uiStartSectorID = EOC;
+	newdir->uiSize = 0;
+	newdir->uiParentSecID = dir->i_ino;
+  newdir->bParentSectorPos = (byte)dir->i_private;
+	newdir->iUserID = 0;
+
+  newdir_inode = new_inode(sb);
+  if (!newdir_inode) 
+  {
+    printk(KERN_ERR "failed to create new inode for: %s\n", dentry->d_name.name);
+    brelse(newdir_bh);
+    return -ENOMEM;
+  }
+
+  newdir_inode->i_sb = sb;
+  newdir_inode->i_op = &upanfs_inode_ops;
+  if(S_ISDIR(mode))
+    newdir_inode->i_fop = &upanfs_dir_operations;
+  else
+    newdir_inode->i_fop = &upanfs_file_operations;
+  newdir_inode->i_atime = newdir_inode->i_mtime = newdir_inode->i_ctime = current_time;
+  newdir_inode->i_ino = uiSectorNo;
+  newdir_inode->i_private = uiSectorPos;
+
+  mark_buffer_dirty(newdir_bh);
+  sync_dirty_buffer(newdir_bh);
+  brelse(newdir_bh);
+
+  parent.uiSize++;
+  if(!upanfs_write_dir_entry(sb, &parent, dir->i_ino, (unsigned)dir->i_private))
+  {
+    printk(KERN_ERR "failed to write parent directory: %s\n", parent.Name);
+    return -EPERM;
+  }
+
+  inode_init_owner(newdir_inode, dir, mode);
+  d_add(dentry, newdir_inode);
+
+  return 0;
 }
 
 static int upanfs_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)
 {
-  printk(KERN_INFO "create new file");
-  return 0;
+  return upanfs_create_dir_entry(dir, dentry, mode);
 }
 
 static int upanfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
-  printk(KERN_INFO "create directory");
-  return 0;
+  return upanfs_create_dir_entry(dir, dentry, S_IFDIR | mode);
 }
 
 static int upanfs_iterate(struct file *filp, struct dir_context *ctx)
@@ -240,7 +460,7 @@ static int upanfs_iterate(struct file *filp, struct dir_context *ctx)
     if(!(bh = sb_bread(sb, sector_to_block(sb, sector))))
     {
       printk(KERN_ERR "out of memory - failed to allocate bh");
-      return -ENOSPC;
+      return -ENOMEM;
     }
     dir_buffer = bh->b_data + block_offset(sb, sector);
     for(unsigned uiSectorPosIndex = 0; uiSectorPosIndex < DIR_ENTRIES_PER_SECTOR; uiSectorPosIndex++)
@@ -266,8 +486,19 @@ static int upanfs_iterate(struct file *filp, struct dir_context *ctx)
   return 0;
 }
 
-static bool upanfs_get_fs_bootblock(byte* bpb_data, upanfs_mount_block* mblock)
+static bool upanfs_get_fs_bootblock(struct super_block* sb)
 {
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+  struct buffer_head* bh;
+  byte* bpb_data;
+  if(!(bh = sb_bread(sb, sector_to_block(sb, 1))))
+  {
+    printk(KERN_ERR "Failed to read first BPB block");
+    return false;
+  }
+
+  bpb_data = bh->b_data + block_offset(sb, 1);
+
   if(bpb_data[510] != (byte)0x55 || bpb_data[511] != (byte)0xAA)
   {
      printk(KERN_ERR "Invalid BPB sector end");
@@ -275,6 +506,7 @@ static bool upanfs_get_fs_bootblock(byte* bpb_data, upanfs_mount_block* mblock)
   }
 
   memcpy(&mblock->bpb, bpb_data, sizeof(upanfs_boot_block));
+  brelse(bh);
 
   if(mblock->bpb.BPB_BootSig != 0x29)
   {
@@ -311,42 +543,52 @@ static bool upanfs_get_fs_bootblock(byte* bpb_data, upanfs_mount_block* mblock)
 
 static bool upanfs_load_fs_table(struct super_block* sb)
 {
-  struct buffer_head *bh;
-  int i;
   int sectorsPerBlock = sectors_per_block(sb);
   upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
-
   mblock->fstable = (byte*)kmalloc(512 * mblock->bpb.BPB_FSTableSize, GFP_KERNEL);
 
-  for(i = 0; i < mblock->bpb.BPB_FSTableSize; i += sectorsPerBlock)
+  for(int i = 0; i < mblock->bpb.BPB_FSTableSize;)
   {
+    struct buffer_head *bh;
+    int m, n;
     int sector = i + mblock->bpb.BPB_RsvdSecCnt + 1;
-    int n = mblock->bpb.BPB_FSTableSize - i;
     if(!(bh = sb_bread(sb, sector_to_block(sb, sector))))
       return false;
-    if(n > sectorsPerBlock)
-      n = sectorsPerBlock;
-    memcpy(mblock->fstable + 512 * i, bh->b_data, 512 * n);
+    
+    m = sector % sectorsPerBlock;
+    n = sectorsPerBlock - m;
+    if(i + n > mblock->bpb.BPB_FSTableSize)
+      n = mblock->bpb.BPB_FSTableSize - i;
+
+    memcpy(mblock->fstable + 512 * i, bh->b_data + block_offset(sb, sector), 512 * n);
+    i += n;
     brelse(bh);
   }
 
   return true;
 }
 
-static bool upanfs_load(byte* bpb_data, struct super_block *sb, void *data)
+static int upanfs_load(struct super_block *sb, void *data, int silent)
 {
   struct inode *root_inode;
-  upanfs_mount_block* mblock = (upanfs_mount_block*)kmalloc(sizeof(upanfs_mount_block), GFP_KERNEL);
+  upanfs_mount_block* mblock;
+  sb->s_fs_info = 0;
+  if(sb->s_blocksize % 512 != 0)
+  {
+    printk(KERN_ERR "device block size is not a multiple of 512!");
+    return -EPERM;
+  }
+  mblock = (upanfs_mount_block*)kmalloc(sizeof(upanfs_mount_block), GFP_KERNEL);
   mblock->fstable = 0;
   /* A magic number that uniquely identifies upanfs filesystem type */
   sb->s_magic = 0x93;
   sb->s_fs_info = mblock;
 
-  if(!upanfs_get_fs_bootblock(bpb_data, mblock))
-    return false;
+  if(!upanfs_get_fs_bootblock(sb))
+    return -EPERM;
 
   if(!upanfs_load_fs_table(sb))
-    return false;
+    return -EPERM;
 
   sb->s_maxbytes = mblock->bpb.BPB_BytesPerSec;
   sb->s_op = &upanfs_sops;
@@ -364,41 +606,16 @@ static bool upanfs_load(byte* bpb_data, struct super_block *sb, void *data)
   if (!sb->s_root)
   {
     printk(KERN_ERR "failed to make_root");
-    return false;
+    return -EPERM;
   }
 
-  return true;
-}
-
-static int upanfs_mount_init(struct super_block *sb, void *data, int silent)
-{
-  struct buffer_head *bh;
-  bool ret = false;
-  byte* bpb_data;
-  sb->s_fs_info = 0;
-
-  if(sb->s_blocksize % 512 != 0)
-  {
-    printk(KERN_ERR "device block size is not a multiple of 512!");
-    return -ENOSPC;
-  }
-
-  if(!(bh = sb_bread(sb, sector_to_block(sb, 1))))
-  {
-    printk(KERN_ERR "Failed to read first BPB block");
-    return -ENOMEM;
-  }
-
-  bpb_data = bh->b_data + block_offset(sb, 1);
-  ret = upanfs_load(bpb_data, sb, data);
-  brelse(bh);
-  return ret ? 0 : -ENOSPC;
+  return 0;
 }
 
 static struct dentry* upanfs_mount(struct file_system_type *fs_type, int flags, const char *dev_name, void *data)
 {
   struct dentry *ret;
-  ret = mount_bdev(fs_type, flags, dev_name, data, upanfs_mount_init);
+  ret = mount_bdev(fs_type, flags, dev_name, data, upanfs_load);
   if (unlikely(IS_ERR(ret)))
     printk(KERN_ERR "Error mounting upanfs");
   else
@@ -411,7 +628,22 @@ static void upanfs_umount(struct super_block *sb)
   upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
   if(mblock)
   {
-    printk(KERN_INFO "destroying mount block\n");
+    //sync bpb
+    struct buffer_head* bpb_bh;
+    byte* bpb_data;
+    if(!(bpb_bh = sb_bread(sb, sector_to_block(sb, 1))))
+    {
+      printk(KERN_ERR "Failed to allocate for bpb_bh");
+    }
+    else
+    {
+      bpb_data = bpb_bh->b_data + block_offset(sb, 1);
+      memcpy(bpb_data, &mblock->bpb, sizeof(upanfs_boot_block));
+      mark_buffer_dirty(bpb_bh);
+      sync_dirty_buffer(bpb_bh);
+      brelse(bpb_bh);
+    }
+
     if(mblock->fstable)
       kfree(mblock->fstable);
     kfree(mblock);
