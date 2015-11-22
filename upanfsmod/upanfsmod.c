@@ -85,16 +85,6 @@ static struct timespec seconds_to_timespec(unsigned seconds)
   return ts;
 }
 
-static ssize_t upanfs_read(struct file * filp, char __user * buf, size_t len, loff_t * ppos)
-{
-  return 0;
-}
-
-static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t len, loff_t * ppos)
-{
-  return 0;
-}
-
 static bool upanfs_read_dir_entry(struct super_block* sb, upanfs_dir_entry* dir_entry, unsigned sector, unsigned sector_pos)
 {
   upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
@@ -105,6 +95,34 @@ static bool upanfs_read_dir_entry(struct super_block* sb, upanfs_dir_entry* dir_
     return false;
   offset = block_offset(sb, real_sector);
   memcpy((byte*)dir_entry, bh->b_data + offset + sector_pos *  sizeof(upanfs_dir_entry), sizeof(upanfs_dir_entry));
+  brelse(bh);
+  return true;
+}
+
+static bool upanfs_read_sector(struct super_block* sb, unsigned sector, byte* buffer)
+{
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+  int offset;
+  unsigned real_sector = upanfs_get_real_sec_num(sector, mblock);
+  struct buffer_head* bh = sb_bread(sb, sector_to_block(sb, real_sector));
+  if(!bh)
+    return false;
+  offset = block_offset(sb, real_sector);
+  memcpy(buffer, bh->b_data + offset, 512);
+  brelse(bh);
+  return true;
+}
+
+static bool upanfs_write_sector(struct super_block* sb, unsigned sector, byte* buffer)
+{
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+  int offset;
+  unsigned real_sector = upanfs_get_real_sec_num(sector, mblock);
+  struct buffer_head* bh = sb_bread(sb, sector_to_block(sb, real_sector));
+  if(!bh)
+    return false;
+  offset = block_offset(sb, real_sector);
+  memcpy(bh->b_data + offset, buffer, 512);
   brelse(bh);
   return true;
 }
@@ -123,6 +141,340 @@ static bool upanfs_write_dir_entry(struct super_block* sb, upanfs_dir_entry* dir
   sync_dirty_buffer(bh);
   brelse(bh);
   return true;
+}
+
+static bool upanfs_set_sector_value(struct super_block* sb, unsigned uiSectorID, unsigned uiValue)
+{
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+  struct buffer_head *bh;
+  unsigned sector = mblock->bpb.BPB_RsvdSecCnt + 1 + FSTABLE_BLOCK_ID(uiSectorID);
+  byte* fstable_block;
+
+  ((unsigned*)mblock->fstable)[uiSectorID] = uiValue;
+
+  if(!(bh = sb_bread(sb, sector_to_block(sb, sector))))
+  {
+    printk(KERN_ERR "failed to read fstable sector\n");
+    return false;
+  }
+
+  fstable_block = bh->b_data + block_offset(sb, sector);
+  ((unsigned*)fstable_block)[FSTABLE_BLOCK_OFFSET(uiSectorID)] = uiValue;
+  
+  mark_buffer_dirty(bh);
+  sync_dirty_buffer(bh);
+  brelse(bh);
+
+  if(uiValue == EOC)
+    mblock->bpb.uiUsedSectors++;
+   else if(uiValue == 0)
+    mblock->bpb.uiUsedSectors--;
+  
+  return true;
+}
+
+static bool upanfs_get_free_sector(struct super_block* sb, unsigned* uiSectorID)
+{
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+  unsigned* fstable = (unsigned*)mblock->fstable;
+  unsigned fstable_size = mblock->bpb.BPB_FSTableSize * ENTRIES_PER_TABLE_SECTOR;
+
+  for(unsigned i = 0; i < fstable_size; ++i)
+  {
+    if(!(fstable[i] & EOC))
+    {
+      *uiSectorID = i;
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool upanfs_allocate_sector(struct super_block* sb, unsigned* uiFreeSectorID)
+{
+  if(!upanfs_get_free_sector(sb, uiFreeSectorID))
+    return false;
+
+  if(!upanfs_set_sector_value(sb, *uiFreeSectorID, EOC))
+    return false;
+
+  return true;
+}
+
+static ssize_t upanfs_read(struct file * filp, char __user * buf, size_t len, loff_t* ppos)
+{
+  struct inode* finode = filp->f_path.dentry->d_inode;
+  const char* fname = filp->f_path.dentry->d_name.name;
+  struct super_block* sb = finode->i_sb;
+  upanfs_dir_entry file_dir_entry;
+
+	int iStartReadSectorNo, iStartReadSectorPos;
+  size_t readCount, readRemainingCount;
+  unsigned uiCurrentSectorID;
+
+  byte sector_buffer[512];
+
+  if(!upanfs_read_dir_entry(sb, &file_dir_entry, finode->i_ino, (unsigned)finode->i_private))
+  {
+    printk(KERN_ERR "failed to read dir entry for file: %s\n", fname);
+    return -EFAULT;
+  }
+	
+  if((file_dir_entry.usAttribute & ATTR_TYPE_DIRECTORY) != 0)
+  {
+    printk(KERN_ERR "%s is a directory - cannot read as a file\n", fname);
+    return -EFAULT;
+  }
+
+  if(*ppos >= file_dir_entry.uiSize)
+    return 0;
+
+  iStartReadSectorNo = *ppos / 512;
+  iStartReadSectorPos = *ppos % 512;
+  uiCurrentSectorID = file_dir_entry.uiStartSectorID;
+  for(int i = 0; i < iStartReadSectorNo; ++i)
+    uiCurrentSectorID = upanfs_get_sec_entry_val(sb, uiCurrentSectorID);
+
+  readCount = 0;
+	readRemainingCount = len < (file_dir_entry.uiSize - *ppos) ? len : (file_dir_entry.uiSize - *ppos);
+
+	while(true)
+	{
+    size_t n;
+		if(uiCurrentSectorID == EOC)
+    {
+      *ppos += readCount;
+      return readCount;
+    }
+		
+    if(!upanfs_read_sector(sb, uiCurrentSectorID, sector_buffer))
+    {
+      printk(KERN_ERR "failed to read sector: %u\n", uiCurrentSectorID);
+      return -EFAULT;
+    }
+
+    n = 512 - iStartReadSectorPos;
+    n = n < readRemainingCount ? n : readRemainingCount;
+
+    if(copy_to_user(buf + readCount, sector_buffer + iStartReadSectorPos, n))
+    {
+      printk(KERN_ERR "error copying read buffer to user space for sector: %u, len: %zu", uiCurrentSectorID, n);
+      return -EFAULT;
+    }
+
+    iStartReadSectorPos = 0;
+    readCount += n;
+    readRemainingCount -= n;
+
+    if(readRemainingCount <= 0)
+    {
+      *ppos += readCount;
+      return readCount;
+    }
+
+    uiCurrentSectorID = upanfs_get_sec_entry_val(sb, uiCurrentSectorID);
+  }
+}
+
+static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t len, loff_t* ppos)
+{
+  struct inode* finode = filp->f_path.dentry->d_inode;
+  const char* fname = filp->f_path.dentry->d_name.name;
+  struct super_block* sb = finode->i_sb;
+  upanfs_dir_entry file_dir_entry;
+
+	unsigned uiCurrentSectorID, uiPrevSectorID = EOC;
+	int iStartWriteSectorNo, iStartWriteSectorPos, iSectorIndex;
+	size_t writeRemainingCount, writtenCount;
+  byte sector_buffer[512];
+  bool bStartAllocation;
+
+  if(len == 0)
+    return 0;
+
+  if(!upanfs_read_dir_entry(sb, &file_dir_entry, finode->i_ino, (unsigned)finode->i_private))
+  {
+    printk(KERN_ERR "failed to read dir entry for file: %s\n", fname);
+    return -EFAULT;
+  }
+	
+  if((file_dir_entry.usAttribute & ATTR_TYPE_DIRECTORY) != 0)
+  {
+    printk(KERN_ERR "%s is a directory - cannot write as a file\n", fname);
+    return -EFAULT;
+  }
+
+	iStartWriteSectorNo = *ppos / 512;
+	iStartWriteSectorPos = *ppos % 512;
+
+  uiCurrentSectorID = file_dir_entry.uiStartSectorID;
+  iSectorIndex = 0;
+  while(iSectorIndex < iStartWriteSectorNo && uiCurrentSectorID != EOC)
+  {
+    ++iSectorIndex;
+    uiPrevSectorID = uiCurrentSectorID;
+    uiCurrentSectorID = upanfs_get_sec_entry_val(sb, uiCurrentSectorID);
+  }
+
+	if(uiCurrentSectorID == EOC)
+	{
+		memset(sector_buffer, 0, 512);
+
+		do
+		{
+      if(!upanfs_allocate_sector(sb, &uiCurrentSectorID))
+      {
+        printk(KERN_ERR "failed to allocate new sector while writing file: %s\n", fname);
+        return -EFAULT;
+      }
+
+			if(file_dir_entry.uiStartSectorID == EOC)
+			{
+				file_dir_entry.uiStartSectorID = uiCurrentSectorID ;
+			}
+			else
+			{
+        if(!upanfs_set_sector_value(sb, uiPrevSectorID, uiCurrentSectorID))
+        {
+          printk(KERN_ERR "failed to set sector value for: %u\n", uiPrevSectorID);
+          return -EFAULT;
+        }
+			}
+			
+			uiPrevSectorID = uiCurrentSectorID ;
+
+      if(!upanfs_write_sector(sb, uiCurrentSectorID, sector_buffer))
+      {
+        printk(KERN_ERR "error writing to sector: %u\n", uiCurrentSectorID);
+        return -EFAULT;
+      }
+			
+      iSectorIndex++ ;
+
+		} while(iSectorIndex <= iStartWriteSectorNo);
+	}
+
+	writtenCount = 0;
+	writeRemainingCount = len;
+
+	if(iStartWriteSectorPos != 0)
+	{
+    if(!upanfs_read_sector(sb, uiCurrentSectorID, sector_buffer))
+    {
+      printk(KERN_ERR "error reading sector: %u\n", uiCurrentSectorID);
+      return -EFAULT;
+    }
+
+		writtenCount = 512 - iStartWriteSectorPos;
+		if(len <= writtenCount)
+			writtenCount = len;
+
+    if(copy_from_user(sector_buffer + iStartWriteSectorPos, buf, writtenCount))
+    {
+      printk(KERN_ERR "error copying from user buffer for sector: %u", uiCurrentSectorID);
+      return -EFAULT;
+    }
+
+    if(!upanfs_write_sector(sb, uiCurrentSectorID, sector_buffer))
+    {
+      printk(KERN_ERR "error writing sector: %u\n", uiCurrentSectorID);
+      return -EFAULT;
+    }
+			
+    if(writtenCount == len)
+    {
+      *ppos += writtenCount;
+      return writtenCount;
+    }
+
+    uiPrevSectorID = uiCurrentSectorID;
+    uiCurrentSectorID = upanfs_get_sec_entry_val(sb, uiCurrentSectorID);
+
+    writeRemainingCount -= writtenCount;
+	}
+
+	bStartAllocation = false ;
+	
+	while(true)
+	{
+		if(uiCurrentSectorID == EOC || bStartAllocation == true)
+		{
+			bStartAllocation = true ;
+      if(!upanfs_allocate_sector(sb, &uiCurrentSectorID))
+      {
+        printk(KERN_ERR, "failed to allocate new sector\n");
+        return -EFAULT;
+      }
+
+      if(!upanfs_set_sector_value(sb, uiPrevSectorID, uiCurrentSectorID))
+      {
+        printk(KERN_ERR "failed set sector value for: %u\n", uiPrevSectorID);
+        return -EFAULT;
+      }
+		}
+		
+    if(writeRemainingCount < 512)
+		{
+			if(bStartAllocation == false && (*ppos + len) < file_dir_entry.uiSize)
+			{
+        if(!upanfs_read_sector(sb, uiCurrentSectorID, sector_buffer))
+        {
+          printk(KERN_ERR "failed to read sector: %u\n", uiCurrentSectorID);
+          return -EFAULT;
+        }
+			}
+
+      if(copy_from_user(sector_buffer, buf + writtenCount, writeRemainingCount))
+      {
+        printk(KERN_ERR "failed to copy from user buffer for sector: %u\n", uiCurrentSectorID);
+        return -EFAULT;
+      }
+
+      if(!upanfs_write_sector(sb, uiCurrentSectorID, sector_buffer))
+      {
+        printk(KERN_ERR "failed to write sector: %u\n", uiCurrentSectorID);
+        return -EFAULT;
+      }
+
+      writtenCount += writeRemainingCount;
+      break;
+		}
+
+    if(copy_from_user(sector_buffer, buf + writtenCount, 512))
+    {
+      printk(KERN_ERR "failed to copy from user buffer for sector: %u\n", uiCurrentSectorID);
+      return -EFAULT;
+    }
+
+    if(!upanfs_write_sector(sb, uiCurrentSectorID, sector_buffer))
+    {
+      printk(KERN_ERR "failed to write sector: %u\n", uiCurrentSectorID);
+      return -EFAULT;
+    }
+		
+		writtenCount += 512;
+		writeRemainingCount -= 512;
+
+		if(writeRemainingCount == 0)
+      break;
+
+		uiPrevSectorID = uiCurrentSectorID;
+		uiCurrentSectorID = upanfs_get_sec_entry_val(sb, uiCurrentSectorID);
+	}
+
+  if(file_dir_entry.uiSize < (*ppos + len))
+  {
+    file_dir_entry.uiSize = *ppos + len;
+    if(!upanfs_write_dir_entry(sb, &file_dir_entry, finode->i_ino, (unsigned)finode->i_private))
+    {
+      printk(KERN_ERR "failed to write dir-entry for file: %s\n", fname);
+      return -EFAULT;
+    }
+  }
+
+  *ppos += writtenCount;
+
+  return writtenCount;
 }
 
 static void upanfs_destory_inode(struct inode *inode)
@@ -207,64 +559,6 @@ static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *c
   if(status == 3)
     printk(KERN_INFO "file/directory [%s] not found\n", child_dentry->d_name.name);
   return NULL;
-}
-
-static bool upanfs_set_sector_value(struct super_block* sb, unsigned uiSectorID, unsigned uiValue)
-{
-  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
-  struct buffer_head *bh;
-  unsigned sector = mblock->bpb.BPB_RsvdSecCnt + 1 + FSTABLE_BLOCK_ID(uiSectorID);
-  byte* fstable_block;
-
-  ((unsigned*)mblock->fstable)[uiSectorID] = uiValue;
-
-  if(!(bh = sb_bread(sb, sector_to_block(sb, sector))))
-  {
-    printk(KERN_ERR "failed to read fstable sector\n");
-    return false;
-  }
-
-  fstable_block = bh->b_data + block_offset(sb, sector);
-  ((unsigned*)fstable_block)[FSTABLE_BLOCK_OFFSET(uiSectorID)] = uiValue;
-  
-  mark_buffer_dirty(bh);
-  sync_dirty_buffer(bh);
-  brelse(bh);
-
-  if(uiValue == EOC)
-    mblock->bpb.uiUsedSectors++;
-   else if(uiValue == 0)
-    mblock->bpb.uiUsedSectors--;
-  
-  return true;
-}
-
-static bool upanfs_get_free_sector(struct super_block* sb, unsigned* uiSectorID)
-{
-  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
-  unsigned* fstable = (unsigned*)mblock->fstable;
-  unsigned fstable_size = mblock->bpb.BPB_FSTableSize * ENTRIES_PER_TABLE_SECTOR;
-
-  for(unsigned i = 0; i < fstable_size; ++i)
-  {
-    if(!(fstable[i] & EOC))
-    {
-      *uiSectorID = i;
-      return true;
-    }
-  }
-  return false;
-}
-
-static bool upanfs_allocate_sector(struct super_block* sb, unsigned* uiFreeSectorID)
-{
-  if(!upanfs_get_free_sector(sb, uiFreeSectorID))
-    return false;
-
-  if(!upanfs_set_sector_value(sb, *uiFreeSectorID, EOC))
-    return false;
-
-  return true;
 }
 
 static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umode_t mode)
