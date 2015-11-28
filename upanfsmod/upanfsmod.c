@@ -85,6 +85,13 @@ static struct timespec seconds_to_timespec(unsigned seconds)
   return ts;
 }
 
+static unsigned dir_size(unsigned fileCount)
+{
+  if(fileCount < DIR_ENTRIES_PER_SECTOR)
+    return 512;
+  return ((fileCount / DIR_ENTRIES_PER_SECTOR) + (fileCount % DIR_ENTRIES_PER_SECTOR ? 1 : 0)) * 512;
+}
+
 static bool upanfs_read_dir_entry(struct super_block* sb, upanfs_dir_entry* dir_entry, unsigned sector, unsigned sector_pos)
 {
   upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
@@ -123,6 +130,8 @@ static bool upanfs_write_sector(struct super_block* sb, unsigned sector, byte* b
     return false;
   offset = block_offset(sb, real_sector);
   memcpy(bh->b_data + offset, buffer, 512);
+  mark_buffer_dirty(bh);
+  sync_dirty_buffer(bh);
   brelse(bh);
   return true;
 }
@@ -288,6 +297,7 @@ static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t 
 	size_t writeRemainingCount, writtenCount;
   byte sector_buffer[512];
   bool bStartAllocation;
+  bool bDone = false;
 
   if(len == 0)
     return 0;
@@ -349,7 +359,7 @@ static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t 
         return -EFAULT;
       }
 			
-      iSectorIndex++ ;
+      iSectorIndex++;
 
 		} while(iSectorIndex <= iStartWriteSectorNo);
 	}
@@ -383,26 +393,26 @@ static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t 
 			
     if(writtenCount == len)
     {
-      *ppos += writtenCount;
-      return writtenCount;
+      bDone = true;
     }
-
-    uiPrevSectorID = uiCurrentSectorID;
-    uiCurrentSectorID = upanfs_get_sec_entry_val(sb, uiCurrentSectorID);
-
-    writeRemainingCount -= writtenCount;
+    else
+    {
+      uiPrevSectorID = uiCurrentSectorID;
+      uiCurrentSectorID = upanfs_get_sec_entry_val(sb, uiCurrentSectorID);
+      writeRemainingCount -= writtenCount;
+    }
 	}
 
 	bStartAllocation = false ;
 	
-	while(true)
+	while(!bDone)
 	{
 		if(uiCurrentSectorID == EOC || bStartAllocation == true)
 		{
 			bStartAllocation = true ;
       if(!upanfs_allocate_sector(sb, &uiCurrentSectorID))
       {
-        printk(KERN_ERR, "failed to allocate new sector\n");
+        printk(KERN_ERR "failed to allocate new sector\n");
         return -EFAULT;
       }
 
@@ -471,7 +481,7 @@ static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t 
       return -EFAULT;
     }
   }
-
+  finode->i_size = file_dir_entry.uiSize;
   *ppos += writtenCount;
 
   return writtenCount;
@@ -525,10 +535,15 @@ static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *c
 
         isDir = cur_dir->usAttribute & ATTR_TYPE_DIRECTORY;
         if(isDir)
+        {
           inode->i_fop = &upanfs_dir_operations;
+          inode->i_size = dir_size(cur_dir->uiSize);
+        }
         else
+        {
           inode->i_fop = &upanfs_file_operations;
-
+          inode->i_size = cur_dir->uiSize;
+        }
         inode->i_atime = seconds_to_timespec(cur_dir->AccessedTime.tSec);
         inode->i_mtime = seconds_to_timespec(cur_dir->ModifiedTime.tSec);
         inode->i_ctime = seconds_to_timespec(cur_dir->CreatedTime.tSec);
@@ -658,7 +673,7 @@ static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umo
   if(S_ISDIR(mode))
     newdir->usAttribute = ATTR_DIR_DEFAULT | ATTR_TYPE_DIRECTORY;
   else
-    newdir->usAttribute = ATTR_FILE_DEFAULT;
+    newdir->usAttribute = ATTR_FILE_DEFAULT | ATTR_TYPE_FILE;
   newdir->CreatedTime.tSec = newdir->AccessedTime.tSec = newdir->ModifiedTime.tSec = current_time.tv_sec;
 	newdir->uiStartSectorID = EOC;
 	newdir->uiSize = 0;
@@ -683,6 +698,7 @@ static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umo
   newdir_inode->i_atime = newdir_inode->i_mtime = newdir_inode->i_ctime = current_time;
   newdir_inode->i_ino = uiSectorNo;
   newdir_inode->i_private = uiSectorPos;
+  newdir_inode->i_size = 512;
 
   mark_buffer_dirty(newdir_bh);
   sync_dirty_buffer(newdir_bh);
@@ -694,7 +710,8 @@ static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umo
     printk(KERN_ERR "failed to write parent directory: %s\n", parent.Name);
     return -EPERM;
   }
-
+  
+  dir->i_size = dir_size(parent.uiSize);
   inode_init_owner(newdir_inode, dir, mode);
   d_add(dentry, newdir_inode);
 
@@ -866,6 +883,7 @@ static int upanfs_load(struct super_block *sb, void *data, int silent)
 {
   struct inode *root_inode;
   upanfs_mount_block* mblock;
+  upanfs_dir_entry root_dir;
   sb->s_fs_info = 0;
   if(sb->s_blocksize % 512 != 0)
   {
@@ -884,6 +902,12 @@ static int upanfs_load(struct super_block *sb, void *data, int silent)
   if(!upanfs_load_fs_table(sb))
     return -EPERM;
 
+  if(!upanfs_read_dir_entry(sb, &root_dir, 0, 0))
+  {
+    printk(KERN_ERR "error reading root dir\n");
+    return -EFAULT;
+  }
+
   sb->s_maxbytes = mblock->bpb.BPB_BytesPerSec;
   sb->s_op = &upanfs_sops;
 
@@ -894,8 +918,8 @@ static int upanfs_load(struct super_block *sb, void *data, int silent)
   root_inode->i_op = &upanfs_inode_ops;
   root_inode->i_fop = &upanfs_dir_operations;
   root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime = CURRENT_TIME;
-
   root_inode->i_private = 0;
+  root_inode->i_size = dir_size(root_dir.uiSize);
   sb->s_root = d_make_root(root_inode);
   if (!sb->s_root)
   {

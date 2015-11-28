@@ -5,6 +5,7 @@
 #define ATTR_FILE_DEFAULT	0x03A4  //0000(Rsv) 001(File) 110(u:rw-) 100(g:r--) 100(o:r--)
 #define ATTR_DELETED_DIR 0x1000
 #define ATTR_TYPE_DIRECTORY 0x2000
+#define ATTR_TYPE_FILE    0x4000
 
 #define EOC 0x0FFFFFFF
 #define DIR_ENTRIES_PER_SECTOR 7
