@@ -18,6 +18,8 @@ static void upanfs_put_super(struct super_block *sb);
 static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *child_dentry, unsigned int flags);
 static int upanfs_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl);
 static int upanfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode);
+static int upanfs_rmdir(struct inode *dir, struct dentry *dentry);
+static int upanfs_delete(struct inode *dir, struct dentry *dentry);
 static int upanfs_iterate(struct file *filp, struct dir_context *ctx);
 static ssize_t upanfs_read(struct file * filp, char __user * buf, size_t len, loff_t * ppos);
 static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t len, loff_t * ppos);
@@ -39,6 +41,8 @@ static struct inode_operations upanfs_inode_ops = {
   .create = upanfs_create,
   .lookup = upanfs_lookup,
   .mkdir = upanfs_mkdir,
+  .rmdir = upanfs_rmdir,
+  .unlink = upanfs_delete,
 };
 
 const struct file_operations upanfs_dir_operations = {
@@ -90,6 +94,16 @@ static unsigned dir_size(unsigned fileCount)
   if(fileCount < DIR_ENTRIES_PER_SECTOR)
     return 512;
   return ((fileCount / DIR_ENTRIES_PER_SECTOR) + (fileCount % DIR_ENTRIES_PER_SECTOR ? 1 : 0)) * 512;
+}
+
+static unsigned sector_pos_cast(void* p)
+{
+  return (unsigned long)p;
+}
+
+static void* inode_private_cast(unsigned long p)
+{
+  return (void*)p;
 }
 
 static bool upanfs_read_dir_entry(struct super_block* sb, upanfs_dir_entry* dir_entry, unsigned sector, unsigned sector_pos)
@@ -210,6 +224,12 @@ static bool upanfs_allocate_sector(struct super_block* sb, unsigned* uiFreeSecto
   return true;
 }
 
+static bool upanfs_deallocate_sector(struct super_block* sb, unsigned uiSectorID, unsigned* uiNextSectorID)
+{
+  *uiNextSectorID = upanfs_get_sec_entry_val(sb, uiSectorID);
+  return upanfs_set_sector_value(sb, uiSectorID, 0);
+}
+
 static ssize_t upanfs_read(struct file * filp, char __user * buf, size_t len, loff_t* ppos)
 {
   struct inode* finode = filp->f_path.dentry->d_inode;
@@ -223,7 +243,7 @@ static ssize_t upanfs_read(struct file * filp, char __user * buf, size_t len, lo
 
   byte sector_buffer[512];
 
-  if(!upanfs_read_dir_entry(sb, &file_dir_entry, finode->i_ino, (unsigned)finode->i_private))
+  if(!upanfs_read_dir_entry(sb, &file_dir_entry, finode->i_ino, sector_pos_cast(finode->i_private)))
   {
     printk(KERN_ERR "failed to read dir entry for file: %s\n", fname);
     return -EFAULT;
@@ -302,7 +322,7 @@ static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t 
   if(len == 0)
     return 0;
 
-  if(!upanfs_read_dir_entry(sb, &file_dir_entry, finode->i_ino, (unsigned)finode->i_private))
+  if(!upanfs_read_dir_entry(sb, &file_dir_entry, finode->i_ino, sector_pos_cast(finode->i_private)))
   {
     printk(KERN_ERR "failed to read dir entry for file: %s\n", fname);
     return -EFAULT;
@@ -475,7 +495,7 @@ static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t 
   if(file_dir_entry.uiSize < (*ppos + len))
   {
     file_dir_entry.uiSize = *ppos + len;
-    if(!upanfs_write_dir_entry(sb, &file_dir_entry, finode->i_ino, (unsigned)finode->i_private))
+    if(!upanfs_write_dir_entry(sb, &file_dir_entry, finode->i_ino, sector_pos_cast(finode->i_private)))
     {
       printk(KERN_ERR "failed to write dir-entry for file: %s\n", fname);
       return -EFAULT;
@@ -489,14 +509,18 @@ static ssize_t upanfs_write(struct file * filp, const char __user * buf, size_t 
 
 static void upanfs_destory_inode(struct inode *inode)
 {
-  //upanfs_dir_entry *direntry = (upanfs_dir_entry*)inode->i_private;
-//  printk(KERN_INFO "deleting direntry %s (%lu)\n", direntry->Name, inode->i_ino);
-  //delete directory here ??
+  // no need to implement this
 }
 
 static void upanfs_put_super(struct super_block *sb)
 {
-  printk(KERN_INFO "Calling upanfs_put_super");
+  upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+  if(mblock)
+  {
+    if(mblock->fstable)
+      kfree(mblock->fstable);
+    kfree(mblock);
+  }
 }
 
 static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *child_dentry, unsigned int flags)
@@ -508,7 +532,7 @@ static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *c
   unsigned uiCurrentSectorID;
   int status = 1; //1 = cont, 2 = done_success, 3 = done_failure
   upanfs_dir_entry parent;
-  if(!upanfs_read_dir_entry(sb, &parent, parent_inode->i_ino, (unsigned)parent_inode->i_private))
+  if(!upanfs_read_dir_entry(sb, &parent, parent_inode->i_ino, sector_pos_cast(parent_inode->i_private)))
     return NULL;
   uiCurrentSectorID = parent.uiStartSectorID;
   while(uiCurrentSectorID != EOC)
@@ -547,7 +571,7 @@ static struct dentry *upanfs_lookup(struct inode *parent_inode, struct dentry *c
         inode->i_atime = seconds_to_timespec(cur_dir->AccessedTime.tSec);
         inode->i_mtime = seconds_to_timespec(cur_dir->ModifiedTime.tSec);
         inode->i_ctime = seconds_to_timespec(cur_dir->CreatedTime.tSec);
-        inode->i_private = uiSectorPosIndex;
+        inode->i_private = inode_private_cast(uiSectorPosIndex);
 
         inode_init_owner(inode, parent_inode, isDir ? S_IFDIR | 0755 : S_IFREG | 0644);
         d_add(child_dentry, inode);
@@ -593,7 +617,7 @@ static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umo
   struct super_block* sb = dir->i_sb;
   upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
 
-  if(!upanfs_read_dir_entry(sb, &parent, dir->i_ino, (unsigned)dir->i_private))
+  if(!upanfs_read_dir_entry(sb, &parent, dir->i_ino, sector_pos_cast(dir->i_private)))
   {
     printk(KERN_ERR "failed to read parent dir at sector: %ld\n", dir->i_ino);
     return -EPERM;
@@ -678,7 +702,7 @@ static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umo
 	newdir->uiStartSectorID = EOC;
 	newdir->uiSize = 0;
 	newdir->uiParentSecID = dir->i_ino;
-  newdir->bParentSectorPos = (byte)dir->i_private;
+  newdir->bParentSectorPos = (byte)sector_pos_cast(dir->i_private);
 	newdir->iUserID = 0;
 
   newdir_inode = new_inode(sb);
@@ -697,7 +721,7 @@ static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umo
     newdir_inode->i_fop = &upanfs_file_operations;
   newdir_inode->i_atime = newdir_inode->i_mtime = newdir_inode->i_ctime = current_time;
   newdir_inode->i_ino = uiSectorNo;
-  newdir_inode->i_private = uiSectorPos;
+  newdir_inode->i_private = inode_private_cast(uiSectorPos);
   newdir_inode->i_size = 512;
 
   mark_buffer_dirty(newdir_bh);
@@ -705,7 +729,7 @@ static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umo
   brelse(newdir_bh);
 
   parent.uiSize++;
-  if(!upanfs_write_dir_entry(sb, &parent, dir->i_ino, (unsigned)dir->i_private))
+  if(!upanfs_write_dir_entry(sb, &parent, dir->i_ino, sector_pos_cast(dir->i_private)))
   {
     printk(KERN_ERR "failed to write parent directory: %s\n", parent.Name);
     return -EPERM;
@@ -726,6 +750,76 @@ static int upanfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 static int upanfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
   return upanfs_create_dir_entry(dir, dentry, S_IFDIR | mode);
+}
+
+static int upanfs_delete_dir_entry(struct inode* dir, struct dentry* dentry)
+{
+  const char* fname = dentry->d_name.name;
+  struct super_block* sb = dir->i_sb;
+  struct inode* file_inode = dentry->d_inode;
+  upanfs_dir_entry file_dir_entry;
+  upanfs_dir_entry parent;
+  unsigned uiCurrentSectorID, uiNextSectorID;
+
+  if(!upanfs_read_dir_entry(sb, &file_dir_entry, file_inode->i_ino, sector_pos_cast(file_inode->i_private)))
+  {
+    printk(KERN_ERR "Error reading dir entry for: %s\n", fname);
+    return -EFAULT;
+  }
+
+  if(!upanfs_read_dir_entry(sb, &parent, dir->i_ino, sector_pos_cast(dir->i_private)))
+  {
+    printk(KERN_ERR "Error reading parent dir entry for: %s\n", fname);
+    return -EFAULT;
+  }
+
+	if((file_dir_entry.usAttribute & ATTR_TYPE_DIRECTORY) == ATTR_TYPE_DIRECTORY)
+	{
+		if(file_dir_entry.uiSize != 0)
+    {
+      printk(KERN_ERR "cannot delete directory %s - it's not empty\n", fname);
+      return -ENOTEMPTY;
+    }
+	}
+
+	uiCurrentSectorID = file_dir_entry.uiStartSectorID;
+	while(uiCurrentSectorID != EOC)
+	{
+    if(!upanfs_deallocate_sector(sb, uiCurrentSectorID, &uiNextSectorID))
+    {
+      printk(KERN_ERR "error deallocate sector %u while deleting dir entry: %s\n", uiCurrentSectorID, fname);
+      return -EFAULT;
+    }
+		uiCurrentSectorID = uiNextSectorID;
+	}
+
+  file_dir_entry.usAttribute |= ATTR_DELETED_DIR;
+
+  if(!upanfs_write_dir_entry(sb, &file_dir_entry, file_inode->i_ino, sector_pos_cast(file_inode->i_private)))
+  {
+    printk(KERN_ERR "error writing deleted dir entry for: %s\n", fname);
+    return -EFAULT;
+  }
+
+  parent.uiSize--;
+
+  if(!upanfs_write_dir_entry(sb, &parent, dir->i_ino, sector_pos_cast(dir->i_private)))
+  {
+    printk(KERN_ERR "error writing parent of deleted dir entry for: %s\n", fname);
+    return -EFAULT;
+  }
+
+  return 0;
+}
+
+static int upanfs_rmdir(struct inode* dir, struct dentry* dentry)
+{
+  return upanfs_delete_dir_entry(dir, dentry);
+}
+
+static int upanfs_delete(struct inode* dir, struct dentry* dentry)
+{
+  return upanfs_delete_dir_entry(dir, dentry);
 }
 
 static int upanfs_iterate(struct file *filp, struct dir_context *ctx)
@@ -751,7 +845,7 @@ static int upanfs_iterate(struct file *filp, struct dir_context *ctx)
   inode = filp->f_dentry->d_inode;
   sb = inode->i_sb;
   mblock = (upanfs_mount_block*)sb->s_fs_info;
-  if(!upanfs_read_dir_entry(sb, &dir_entry, inode->i_ino, (unsigned)inode->i_private))
+  if(!upanfs_read_dir_entry(sb, &dir_entry, inode->i_ino, sector_pos_cast(inode->i_private)))
   {
     printk(KERN_ERR "failed to read dir_entry while iterating: %s\n", filp->f_dentry->d_name.name);
     return -EPERM;
@@ -918,7 +1012,7 @@ static int upanfs_load(struct super_block *sb, void *data, int silent)
   root_inode->i_op = &upanfs_inode_ops;
   root_inode->i_fop = &upanfs_dir_operations;
   root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime = CURRENT_TIME;
-  root_inode->i_private = 0;
+  root_inode->i_private = inode_private_cast(0);
   root_inode->i_size = dir_size(root_dir.uiSize);
   sb->s_root = d_make_root(root_inode);
   if (!sb->s_root)
@@ -961,10 +1055,6 @@ static void upanfs_umount(struct super_block *sb)
       sync_dirty_buffer(bpb_bh);
       brelse(bpb_bh);
     }
-
-    if(mblock->fstable)
-      kfree(mblock->fstable);
-    kfree(mblock);
   }
   printk(KERN_INFO "Unmount succesfull.\n");
   kill_block_super(sb);
