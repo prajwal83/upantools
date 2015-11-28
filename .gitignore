@@ -1,4 +1,10 @@
 *.o
+.upanfs*
+*.ko
 depend.d
 elfparser
 mosfsutil
+.tmp_versions
+Module.symvers
+modules.order
+upanfs.mod.c
