@@ -842,18 +842,18 @@ static int upanfs_iterate(struct file *filp, struct dir_context *ctx)
     return 0;
   }
 
-  inode = filp->f_dentry->d_inode;
+  inode = filp->f_path.dentry->d_inode;
   sb = inode->i_sb;
   mblock = (upanfs_mount_block*)sb->s_fs_info;
   if(!upanfs_read_dir_entry(sb, &dir_entry, inode->i_ino, sector_pos_cast(inode->i_private)))
   {
-    printk(KERN_ERR "failed to read dir_entry while iterating: %s\n", filp->f_dentry->d_name.name);
+    printk(KERN_ERR "failed to read dir_entry while iterating: %s\n", filp->f_path.dentry->d_name.name);
     return -EPERM;
   }
 
   if(!(dir_entry.usAttribute & ATTR_TYPE_DIRECTORY))
   {
-    printk(KERN_ERR "%s is not a directory to iterate\n", filp->f_dentry->d_name.name);
+    printk(KERN_ERR "%s is not a directory to iterate\n", filp->f_path.dentry->d_name.name);
     return -ENOTDIR;
   }
 
