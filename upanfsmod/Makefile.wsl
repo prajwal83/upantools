@@ -1,0 +1,10 @@
+obj-m := upanfs.o
+upanfs-objs := upanfsmod.o
+
+CFLAGS_upanfsmod.o := -DDEBUG -std=gnu99
+
+all:
+	make -C $(HOME)/workspace/mosland/WSL2-Linux-Kernel M=$(PWD) modules
+
+clean:
+	make -C $(HOME)/workspace/mosland/WSL2-Linux-Kernel M=$(PWD) clean

@@ -1,3 +1,10 @@
+1. On WSL2, download WSL2 source code from:
+2. In checkout directory, run:
+  make oldconfig && make prepare
+3. Then in upanfsmod directory run:
+  make -f Makefile.wsl
+====================================
+
 1. To load module: 
   sudo insmod ./upanfs.ko
 2. To check if it's loaded
