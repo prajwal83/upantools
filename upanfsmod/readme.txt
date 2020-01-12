@@ -1,6 +1,8 @@
 1. On WSL2, download WSL2 source code from:
 2. In checkout directory, run:
-  make oldconfig && make prepare
+  make config KCONFIG_CONFIG=Microsoft/config-wsl
+  make prepare KCONFIG_CONFIG=Microsoft/config-wsl
+  make modules_prepare KCONFIG_CONFIG=Microsoft/config-wsl
 3. Then in upanfsmod directory run:
   make -f Makefile.wsl
 ====================================

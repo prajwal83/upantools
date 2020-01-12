@@ -81,9 +81,9 @@ static int block_offset(struct super_block* sb, int sector)
   return (sector % sectors_per_block(sb)) * 512;
 }
 
-static struct timespec seconds_to_timespec(unsigned seconds)
+static struct timespec64 seconds_to_timespec(unsigned seconds)
 {
-  struct timespec ts;
+  struct timespec64 ts;
   ts.tv_sec = seconds;
   ts.tv_nsec = seconds * 1000;
   return ts;
@@ -609,13 +609,15 @@ static int upanfs_create_dir_entry(struct inode* dir, struct dentry* dentry, umo
   unsigned uiSectorPos;
   unsigned uiScanDirCount = 0;
   bool found = false;
-  struct timespec current_time = CURRENT_TIME;
+  struct timespec64 current_time;
   unsigned real_sector, offset;
   upanfs_dir_entry parent;
   upanfs_dir_entry* newdir;
   struct buffer_head* newdir_bh = NULL;
   struct super_block* sb = dir->i_sb;
   upanfs_mount_block* mblock = (upanfs_mount_block*)sb->s_fs_info;
+
+  ktime_get_coarse_real_ts64(&current_time);
 
   if(!upanfs_read_dir_entry(sb, &parent, dir->i_ino, sector_pos_cast(dir->i_private)))
   {
@@ -978,6 +980,9 @@ static int upanfs_load(struct super_block *sb, void *data, int silent)
   struct inode *root_inode;
   upanfs_mount_block* mblock;
   upanfs_dir_entry root_dir;
+  struct timespec64 current_time;
+  ktime_get_coarse_real_ts64(&current_time);
+
   sb->s_fs_info = 0;
   if(sb->s_blocksize % 512 != 0)
   {
@@ -1011,7 +1016,7 @@ static int upanfs_load(struct super_block *sb, void *data, int silent)
   root_inode->i_sb = sb;
   root_inode->i_op = &upanfs_inode_ops;
   root_inode->i_fop = &upanfs_dir_operations;
-  root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime = CURRENT_TIME;
+  root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime = current_time;
   root_inode->i_private = inode_private_cast(0);
   root_inode->i_size = dir_size(root_dir.uiSize);
   sb->s_root = d_make_root(root_inode);
