@@ -9,4 +9,3 @@ cp ../../upanlibs/out/libc.so Mnt/lib/
 cp ../../upanapps/out/libmterm.so Mnt/lib/
 
 cp ../../upanix/osutils/.dll Mnt/osin/
-cp ../../upanix/osutils/.procinit Mnt/osin/
